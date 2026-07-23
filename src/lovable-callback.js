@@ -25,7 +25,7 @@ export async function updateConsulta(consultaId, { status, motivo }) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${PAN_WORKER_SECRET}`,
     },
-    body: JSON.stringify({ consulta_id: consultaId, status, motivo: motivo ?? null }),
+    body: JSON.stringify({ consulta_id: consultaId, status, motivo: motivo ?? '' }),
   });
 
   if (!resp.ok) {
