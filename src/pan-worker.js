@@ -27,7 +27,7 @@ async function abrirNovaProposta(page) {
     throw new Error('sessão expirada — será renovada na próxima consulta');
   }
 
-  await page.getByText('Nova proposta', { exact: true }).click();
+  await page.getByRole('complementary').getByText('Nova proposta', { exact: true }).click();
 
   // "Financiamento" costuma já vir selecionado por padrão; clicar de novo
   // não quebra nada se já estiver marcado.
