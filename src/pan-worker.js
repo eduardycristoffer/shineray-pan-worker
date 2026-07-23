@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-import { updateConsulta } from './supabase.js';
+import { updateConsulta } from './lovable-callback.js';
 
 const PAN_LOGIN_URL = process.env.PAN_LOGIN_URL || 'https://veiculos.bancopan.com.br/login';
 const PAN_USERNAME = process.env.PAN_USERNAME;
@@ -92,7 +92,7 @@ export async function processarConsulta(consultaId, cpf) {
     await abrirNovaProposta(page);
     const resultado = await preencherCpfEAguardarResultado(page, cpf);
 
-    await updateConsulta(consultaId, { ...resultado, raw: resultado.motivo });
+    await updateConsulta(consultaId, resultado);
     console.log(`[worker] consulta ${consultaId} -> ${resultado.status}`);
   } catch (err) {
     console.error(`[worker] erro na consulta ${consultaId}:`, err.message);

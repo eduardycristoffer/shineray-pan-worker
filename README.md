@@ -2,7 +2,26 @@
 
 Worker Playwright que loga no go!PAN (`veiculos.bancopan.com.br`), preenche o
 CPF de um lead da Shineray e classifica o resultado (`pre_aprovado`,
-`reprovado` ou `erro`), gravando direto no Supabase.
+`reprovado` ou `erro`).
+
+## Arquitetura
+
+Este projeto usa **Lovable Cloud**, que não expõe a `service_role key` do
+Supabase pra fora. Por isso o worker não fala com o banco diretamente — ele
+devolve o resultado pra um endpoint do próprio Lovable
+(`LOVABLE_CALLBACK_URL`), que já tem acesso privilegiado internamente
+(`supabaseAdmin`) e grava por lá.
+
+```
+Landing page (Lovable)
+  → cria linha em shineray_consultas_cpf (status: pendente)
+  → POST /consulta-cpf no worker (Railway), com { consulta_id, cpf }
+      → worker loga no go!PAN, preenche o CPF, classifica o resultado
+      → worker faz POST de volta pro LOVABLE_CALLBACK_URL
+          → Lovable atualiza a linha via supabaseAdmin
+```
+
+O mesmo `WORKER_SECRET` autentica os dois sentidos da comunicação.
 
 ## Rodar local
 
@@ -19,31 +38,31 @@ Testar:
 curl -X POST http://localhost:3000/consulta-cpf \
   -H "Authorization: Bearer SEU_WORKER_SECRET" \
   -H "Content-Type: application/json" \
-  -d '{"consulta_id":"<uuid da linha no supabase>","cpf":"00000000000"}'
+  -d '{"consulta_id":"<uuid da linha>","cpf":"00000000000"}'
 ```
 
-A resposta HTTP volta na hora (202). O resultado é gravado no Supabase alguns
-segundos depois — acompanhe pela tabela ou pelos logs do processo.
+A resposta HTTP volta na hora (202). O resultado chega no Lovable alguns
+segundos depois, via callback.
 
 ## Deploy no Railway
 
-1. Suba esta pasta pra um repositório GitHub (novo repo, ex.:
-   `shineray-pan-worker`).
-2. No Railway, dentro do projeto `shineray-pan-worker` já criado, adicione um
-   serviço a partir desse repo (`create-deployment` / "Deploy from GitHub" no
-   painel).
-3. Em **Variables**, cole os valores reais de `PAN_USERNAME`, `PAN_PASSWORD`,
-   `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e gere um `WORKER_SECRET`
-   (qualquer string longa aleatória) — direto no painel do Railway, nunca
-   pelo chat.
-4. Railway detecta o `Dockerfile` e builda com o Chromium já instalado.
-5. Depois do deploy, gere um domínio público (Settings → Networking →
-   Generate Domain) e use essa URL no HTTP Request node do n8n.
+1. Repositório: `eduardycristoffer/shineray-pan-worker` (já conectado).
+2. Em **Variables** no Railway, preencher:
+   - `PAN_USERNAME`, `PAN_PASSWORD`
+   - `LOVABLE_CALLBACK_URL` (endpoint que o Lovable vai criar)
+   - `WORKER_SECRET`
+3. Gerar domínio público (Settings → Networking → Generate Domain) e usar
+   essa URL no lado do Lovable, pra ele saber pra onde mandar `{ consulta_id,
+   cpf }`.
+
+## sql/schema.sql
+
+Guardado como referência da estrutura da tabela `shineray_consultas_cpf`.
+Como o Supabase deste projeto é gerenciado pelo Lovable Cloud, o jeito certo
+de criar/alterar a tabela é pedindo pro próprio Lovable (ele roda a migração
+internamente) — não dá pra rodar esse SQL manualmente sem acesso ao painel.
 
 ## O que ainda precisa ser confirmado no portal real
-
-Alguns seletores foram inferidos do texto visível da tela e podem precisar de
-ajuste fino depois do primeiro teste:
 
 - Texto exato do botão de categoria (`Moto`) — `PAN_CATEGORIA` no `.env`
   controla isso.
@@ -56,7 +75,7 @@ ajuste fino depois do primeiro teste:
 ## Segurança
 
 - CPF nunca aparece completo nos logs (`maskCpf`).
-- Credenciais do PAN e do Supabase só existem como variável de ambiente,
-  nunca no código.
-- O endpoint exige o header `Authorization: Bearer <WORKER_SECRET>` — sem
-  isso, qualquer um na internet poderia disparar consultas.
+- Credenciais do PAN só existem como variável de ambiente, nunca no código.
+- O endpoint `/consulta-cpf` exige `Authorization: Bearer <WORKER_SECRET>`.
+- O worker nunca guarda nem vê a `service_role key` do Supabase — quem grava
+  no banco é sempre o Lovable, do lado dele.
