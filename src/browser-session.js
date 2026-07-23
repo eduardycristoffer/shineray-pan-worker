@@ -5,7 +5,7 @@ const PAN_USERNAME = process.env.PAN_USERNAME;
 const PAN_PASSWORD = process.env.PAN_PASSWORD;
 
 let browserPromise = null;
-let contextPromise = null;
+let paginaPromise = null;
 
 /**
  * O go!PAN usa o banner de cookies OneTrust, que fica por cima da página
@@ -44,7 +44,7 @@ async function fazerLogin(page) {
   ]);
 }
 
-async function criarContextoLogado(browser) {
+async function criarPaginaLogada(browser) {
   // Um operador humano usa um navegador normal, não uma janela minúscula
   // ou um viewport óbvio de headless — mantemos algo padrão de desktop.
   const context = await browser.newContext({
@@ -52,19 +52,21 @@ async function criarContextoLogado(browser) {
   });
   const page = await context.newPage();
   await fazerLogin(page);
-  await page.close();
-  return context;
+  return page;
 }
 
 /**
- * Retorna um contexto de navegador já autenticado no go!PAN. Faz login
- * apenas uma vez (na primeira chamada) e reaproveita a mesma sessão nas
- * chamadas seguintes — reflete como um operador humano realmente usa o
- * portal (loga uma vez, faz várias consultas na mesma sessão), em vez de
- * logar do zero a cada CPF, o que é um padrão facilmente identificável
- * como automação.
+ * Retorna a MESMA aba (não uma nova) já autenticada no go!PAN, criando e
+ * logando apenas na primeira chamada. Importante: reaproveitar a mesma
+ * aba (não abrir abas novas) porque apps Angular como esse costumam
+ * guardar parte do estado de sessão em sessionStorage, que não é
+ * compartilhado entre abas mesmo dentro do mesmo contexto logado — uma
+ * aba nova pareceria deslogada na prática mesmo com os cookies certos.
+ * Isso também reflete como um operador humano realmente usa o portal:
+ * loga uma vez, e clica em "Nova proposta" de novo na mesma aba pra cada
+ * cliente, em vez de logar do zero a cada CPF.
  */
-async function getContext() {
+async function getPagina() {
   if (!browserPromise) {
     browserPromise = chromium.launch({
       headless: true,
@@ -73,10 +75,10 @@ async function getContext() {
   }
   const browser = await browserPromise;
 
-  if (!contextPromise) {
-    contextPromise = criarContextoLogado(browser);
+  if (!paginaPromise) {
+    paginaPromise = criarPaginaLogada(browser);
   }
-  return contextPromise;
+  return paginaPromise;
 }
 
 /**
@@ -84,20 +86,14 @@ async function getContext() {
  * perceber que a sessão expirou (ex.: caiu de volta na tela de login).
  */
 export function invalidarSessao() {
-  contextPromise = null;
+  paginaPromise = null;
 }
 
 /**
- * Executa `fn(page)` numa aba nova dentro da sessão já autenticada.
- * Sempre fecha a aba no final, mas mantém o navegador e o login vivos
- * pra próxima consulta.
+ * Executa `fn(page)` na aba persistente já autenticada. Não fecha a aba
+ * no final — ela continua viva pra próxima consulta da fila.
  */
 export async function comPaginaAutenticada(fn) {
-  const context = await getContext();
-  const page = await context.newPage();
-  try {
-    return await fn(page);
-  } finally {
-    await page.close().catch(() => {});
-  }
+  const page = await getPagina();
+  return fn(page);
 }
