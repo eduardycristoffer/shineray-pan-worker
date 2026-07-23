@@ -11,8 +11,26 @@ function maskCpf(cpf) {
   return cpf ? `${cpf.slice(0, 3)}.***.***-**` : 'cpf-vazio';
 }
 
+/**
+ * O go!PAN usa o banner de cookies OneTrust, que fica por cima da página
+ * e intercepta cliques até ser fechado. O botão de aceitar sempre usa o
+ * mesmo ID (#onetrust-accept-btn-handler) em qualquer implementação padrão
+ * do OneTrust — não é um seletor específico deste site, é o padrão deles.
+ * Tenta clicar; se não aparecer, segue em frente sem erro.
+ */
+async function fecharBannerCookies(page) {
+  const aceitar = page.locator('#onetrust-accept-btn-handler');
+  try {
+    await aceitar.waitFor({ state: 'visible', timeout: 5000 });
+    await aceitar.click();
+  } catch {
+    // banner não apareceu — segue normalmente
+  }
+}
+
 async function login(page) {
   await page.goto(PAN_LOGIN_URL, { waitUntil: 'domcontentloaded' });
+  await fecharBannerCookies(page);
 
   await page.locator('#login').fill(PAN_USERNAME);
 
