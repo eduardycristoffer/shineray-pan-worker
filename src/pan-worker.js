@@ -4,7 +4,6 @@ import { updateConsulta } from './lovable-callback.js';
 const PAN_LOGIN_URL = process.env.PAN_LOGIN_URL || 'https://veiculos.bancopan.com.br/login';
 const PAN_USERNAME = process.env.PAN_USERNAME;
 const PAN_PASSWORD = process.env.PAN_PASSWORD;
-const CATEGORIA_VEICULO = process.env.PAN_CATEGORIA || 'Moto';
 const RESULT_TIMEOUT_MS = Number(process.env.RESULT_TIMEOUT_MS || 30000);
 
 function maskCpf(cpf) {
@@ -59,10 +58,8 @@ async function abrirNovaProposta(page) {
     await financiamento.click();
   }
 
-  // TODO: confirmar se o texto do botão de categoria é exatamente
-  // CATEGORIA_VEICULO ("Moto") — ajustar se o seletor real for outro
-  // (ex.: ícone + texto num componente custom).
-  await page.getByRole('button', { name: CATEGORIA_VEICULO }).click();
+  // O botão de categoria (ex.: "Moto") não precisa ser clicado — já vem
+  // no estado certo por padrão. Basta preencher o CPF depois disso.
 }
 
 async function preencherCpfEAguardarResultado(page, cpf) {
