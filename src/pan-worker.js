@@ -61,12 +61,18 @@ async function preencherCpfEAguardarResultado(page, cpf) {
     .then(() => ({ status: 'pre_aprovado', motivo: null }));
 
   // Classe real confirmada no HTML do modal: pan-mahoe-modal__container
-  // (não só "pan-mahoe-modal" — tem o sufixo __container).
+  // (não só "pan-mahoe-modal" — tem o sufixo __container). O MESMO
+  // componente de modal também é usado pra avisar "sessão expirou" —
+  // isso NÃO é uma recusa de crédito, precisa ser tratado à parte pra
+  // não classificar um CPF como reprovado por engano.
   const modalSelector = '.pan-mahoe-modal__container';
   const falha = page
     .waitForSelector(modalSelector, { state: 'visible', timeout: RESULT_TIMEOUT_MS })
     .then(async (el) => {
       const texto = (await el.innerText().catch(() => '')).trim();
+      if (/sess[ãa]o expirou|fa[çc]a o login novamente/i.test(texto)) {
+        return { status: 'erro', motivo: texto, sessaoExpirada: true };
+      }
       return { status: 'reprovado', motivo: texto || 'modal de recusa (texto não capturado)' };
     });
 
@@ -82,15 +88,23 @@ async function preencherCpfEAguardarResultado(page, cpf) {
 /**
  * Executa a consulta completa de um CPF no go!PAN, reaproveitando a
  * sessão já logada, e grava o resultado via callback pro Lovable.
+ * Se a sessão expirar no meio do processo, invalida e tenta de novo
+ * UMA vez (loga de novo do zero) antes de desistir.
  */
-export async function processarConsulta(consultaId, cpf) {
-  console.log(`[worker] iniciando consulta ${consultaId} (cpf ${maskCpf(cpf)})`);
+export async function processarConsulta(consultaId, cpf, tentativa = 1) {
+  console.log(`[worker] iniciando consulta ${consultaId} (cpf ${maskCpf(cpf)})${tentativa > 1 ? ` [tentativa ${tentativa}]` : ''}`);
 
   try {
     const resultado = await comPaginaAutenticada(async (page) => {
       await abrirNovaProposta(page);
       return preencherCpfEAguardarResultado(page, cpf);
     });
+
+    if (resultado.sessaoExpirada && tentativa === 1) {
+      console.log(`[worker] sessão expirou durante a consulta ${consultaId} — invalidando e tentando de novo`);
+      invalidarSessao();
+      return processarConsulta(consultaId, cpf, 2);
+    }
 
     await updateConsulta(consultaId, resultado);
     console.log(`[worker] consulta ${consultaId} -> ${resultado.status}${resultado.motivo ? ` (${resultado.motivo})` : ''}`);
