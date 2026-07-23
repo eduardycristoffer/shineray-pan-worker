@@ -1,51 +1,16 @@
-import { chromium } from 'playwright';
+import { comPaginaAutenticada, invalidarSessao } from './browser-session.js';
 import { updateConsulta } from './lovable-callback.js';
 
-const PAN_LOGIN_URL = process.env.PAN_LOGIN_URL || 'https://veiculos.bancopan.com.br/login';
-const PAN_USERNAME = process.env.PAN_USERNAME;
-const PAN_PASSWORD = process.env.PAN_PASSWORD;
 const RESULT_TIMEOUT_MS = Number(process.env.RESULT_TIMEOUT_MS || 30000);
 
 function maskCpf(cpf) {
   return cpf ? `${cpf.slice(0, 3)}.***.***-**` : 'cpf-vazio';
 }
 
-/**
- * O go!PAN usa o banner de cookies OneTrust, que fica por cima da página
- * e intercepta cliques até ser fechado. O botão de aceitar sempre usa o
- * mesmo ID (#onetrust-accept-btn-handler) em qualquer implementação padrão
- * do OneTrust — não é um seletor específico deste site, é o padrão deles.
- * Tenta clicar; se não aparecer, segue em frente sem erro.
- */
-async function fecharBannerCookies(page) {
-  const aceitar = page.locator('#onetrust-accept-btn-handler');
-  try {
-    await aceitar.waitFor({ state: 'visible', timeout: 5000 });
-    await aceitar.click();
-  } catch {
-    // banner não apareceu — segue normalmente
-  }
-}
-
-async function login(page) {
-  await page.goto(PAN_LOGIN_URL, { waitUntil: 'domcontentloaded' });
-  await fecharBannerCookies(page);
-
-  await page.locator('#login').fill(PAN_USERNAME);
-
-  // O campo de senha vem com readonly no load e libera no foco (proteção
-  // contra autofill). Clicar antes de digitar garante que o estado muda.
-  const senhaInput = page.locator('#password');
-  await senhaInput.click();
-  await senhaInput.pressSequentially(PAN_PASSWORD, { delay: 30 });
-
-  await page.getByRole('button', { name: 'Entrar' }).click();
-
-  // Espera sair da tela de login (troca de URL ou menu "Nova proposta" visível).
-  await Promise.race([
-    page.waitForURL((url) => !url.pathname.includes('/login'), { timeout: 20000 }),
-    page.getByText('Nova proposta').waitFor({ state: 'visible', timeout: 20000 }),
-  ]);
+/** Delay aleatório entre teclas — digitação perfeitamente uniforme é um
+ * padrão fácil de identificar como script. */
+function delayDigitacao() {
+  return 20 + Math.floor(Math.random() * 40);
 }
 
 async function abrirNovaProposta(page) {
@@ -65,7 +30,7 @@ async function abrirNovaProposta(page) {
 async function preencherCpfEAguardarResultado(page, cpf) {
   const cpfInput = page.locator('[aria-controls="listbox-cpf"]');
   await cpfInput.click();
-  await cpfInput.pressSequentially(cpf, { delay: 30 });
+  await cpfInput.pressSequentially(cpf, { delay: delayDigitacao() });
 
   // A busca dispara sozinha ao completar o CPF — não existe botão aqui.
   // Corremos duas esperas em paralelo: navegação pra Ofertas (aprovado)
@@ -86,33 +51,37 @@ async function preencherCpfEAguardarResultado(page, cpf) {
   try {
     return await Promise.race([sucesso, falha]);
   } catch {
-    return { status: 'erro', motivo: 'timeout — nem Ofertas nem modal apareceram' };
+    const urlAtual = page.url();
+    console.error(`[worker] timeout esperando resultado — URL atual: ${urlAtual}`);
+    return { status: 'erro', motivo: `timeout — nem Ofertas nem modal apareceram (URL: ${urlAtual})` };
   }
 }
 
 /**
- * Executa a consulta completa de um CPF no go!PAN e grava o resultado
- * direto no Supabase. Feita pra rodar em background (fire-and-forget
- * a partir do endpoint HTTP).
+ * Executa a consulta completa de um CPF no go!PAN, reaproveitando a
+ * sessão já logada, e grava o resultado via callback pro Lovable.
  */
 export async function processarConsulta(consultaId, cpf) {
   console.log(`[worker] iniciando consulta ${consultaId} (cpf ${maskCpf(cpf)})`);
 
-  const browser = await chromium.launch({ headless: true });
   try {
-    const context = await browser.newContext();
-    const page = await context.newPage();
+    const resultado = await comPaginaAutenticada(async (page) => {
+      // Se a sessão expirou, o site manda de volta pro /login — nesse
+      // caso invalida a sessão guardada e deixa a próxima consulta
+      // forçar um novo login, em vez de insistir numa sessão morta.
+      if (/\/login/i.test(page.url())) {
+        invalidarSessao();
+        throw new Error('sessão expirada — será renovada na próxima consulta');
+      }
 
-    await login(page);
-    await abrirNovaProposta(page);
-    const resultado = await preencherCpfEAguardarResultado(page, cpf);
+      await abrirNovaProposta(page);
+      return preencherCpfEAguardarResultado(page, cpf);
+    });
 
     await updateConsulta(consultaId, resultado);
-    console.log(`[worker] consulta ${consultaId} -> ${resultado.status}`);
+    console.log(`[worker] consulta ${consultaId} -> ${resultado.status}${resultado.motivo ? ` (${resultado.motivo})` : ''}`);
   } catch (err) {
     console.error(`[worker] erro na consulta ${consultaId}:`, err.message);
     await updateConsulta(consultaId, { status: 'erro', motivo: err.message }).catch(() => {});
-  } finally {
-    await browser.close();
   }
 }

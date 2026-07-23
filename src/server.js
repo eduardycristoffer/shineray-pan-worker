@@ -1,5 +1,5 @@
 import express from 'express';
-import { processarConsulta } from './pan-worker.js';
+import { enfileirarConsulta, tamanhoFila } from './queue.js';
 
 const PORT = process.env.PORT || 3000;
 const WORKER_SECRET = process.env.WORKER_SECRET;
@@ -7,7 +7,7 @@ const WORKER_SECRET = process.env.WORKER_SECRET;
 const app = express();
 app.use(express.json());
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+app.get('/health', (_req, res) => res.json({ ok: true, fila: tamanhoFila() }));
 
 app.post('/consulta-cpf', (req, res) => {
   const auth = req.headers.authorization || '';
@@ -20,13 +20,11 @@ app.post('/consulta-cpf', (req, res) => {
     return res.status(400).json({ error: 'consulta_id e cpf são obrigatórios' });
   }
 
-  // Responde na hora — login + navegação + espera do resultado pode levar
-  // 20-60s, então o worker processa em background e grava direto no Supabase.
-  res.status(202).json({ accepted: true, consulta_id });
-
-  processarConsulta(consulta_id, cpf).catch((err) => {
-    console.error(`[server] falha não tratada na consulta ${consulta_id}:`, err);
-  });
+  // Responde na hora — a consulta entra na fila e é processada uma de
+  // cada vez (com espaçamento variável), o worker nunca abre vários
+  // navegadores em paralelo.
+  const posicao = enfileirarConsulta(consulta_id, cpf);
+  res.status(202).json({ accepted: true, consulta_id, posicao_na_fila: posicao });
 });
 
 app.listen(PORT, () => {
