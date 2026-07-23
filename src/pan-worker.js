@@ -2,7 +2,7 @@ import { comPaginaAutenticada, invalidarSessao } from './browser-session.js';
 import { updateConsulta } from './lovable-callback.js';
 
 const PAN_BASE_URL = process.env.PAN_BASE_URL || 'https://veiculos.bancopan.com.br/';
-const RESULT_TIMEOUT_MS = Number(process.env.RESULT_TIMEOUT_MS || 30000);
+const RESULT_TIMEOUT_MS = Number(process.env.RESULT_TIMEOUT_MS || 45000);
 
 function maskCpf(cpf) {
   return cpf ? `${cpf.slice(0, 3)}.***.***-**` : 'cpf-vazio';
@@ -42,18 +42,27 @@ async function abrirNovaProposta(page) {
 
 async function preencherCpfEAguardarResultado(page, cpf) {
   const cpfInput = page.locator('[aria-controls="listbox-cpf"]');
+  const totalEncontrado = await cpfInput.count();
+  console.log(`[worker] campo de CPF encontrado: ${totalEncontrado} elemento(s), URL: ${page.url()}`);
+
   await cpfInput.click();
   await cpfInput.pressSequentially(cpf, { delay: delayDigitacao() });
 
+  const valorDigitado = await cpfInput.inputValue().catch(() => null);
+  console.log(`[worker] valor no campo após digitar tem ${valorDigitado ? valorDigitado.length : 0} caractere(s)`);
+
   // A busca dispara sozinha ao completar o CPF — não existe botão aqui.
-  // Corremos duas esperas em paralelo: navegação pra Ofertas (aprovado)
-  // ou aparecimento de um modal/dialog (reprovado). O que vier primeiro
+  // Corremos duas esperas em paralelo: navegação pra /comparador (aprovado
+  // — o breadcrumb na tela diz "Ofertas", mas a URL real é /comparador)
+  // ou aparecimento do modal de recusa (reprovado). O que vier primeiro
   // decide o resultado; timeout vira "erro" (nunca assume sucesso).
   const sucesso = page
-    .waitForURL((url) => /ofertas/i.test(url.pathname), { timeout: RESULT_TIMEOUT_MS })
+    .waitForURL((url) => /comparador/i.test(url.pathname), { timeout: RESULT_TIMEOUT_MS })
     .then(() => ({ status: 'pre_aprovado', motivo: null }));
 
-  const modalSelector = '[role="dialog"], [aria-modal="true"], .modal, .pan-mahoe-modal';
+  // Classe real confirmada no HTML do modal: pan-mahoe-modal__container
+  // (não só "pan-mahoe-modal" — tem o sufixo __container).
+  const modalSelector = '.pan-mahoe-modal__container';
   const falha = page
     .waitForSelector(modalSelector, { state: 'visible', timeout: RESULT_TIMEOUT_MS })
     .then(async (el) => {
@@ -66,7 +75,7 @@ async function preencherCpfEAguardarResultado(page, cpf) {
   } catch {
     const urlAtual = page.url();
     console.error(`[worker] timeout esperando resultado — URL atual: ${urlAtual}`);
-    return { status: 'erro', motivo: `timeout — nem Ofertas nem modal apareceram (URL: ${urlAtual})` };
+    return { status: 'erro', motivo: `timeout — nem comparador nem modal apareceram (URL: ${urlAtual})` };
   }
 }
 
