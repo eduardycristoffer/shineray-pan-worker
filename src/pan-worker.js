@@ -1,6 +1,7 @@
 import { comPaginaAutenticada, invalidarSessao } from './browser-session.js';
 import { updateConsulta } from './lovable-callback.js';
 
+const PAN_BASE_URL = process.env.PAN_BASE_URL || 'https://veiculos.bancopan.com.br/';
 const RESULT_TIMEOUT_MS = Number(process.env.RESULT_TIMEOUT_MS || 30000);
 
 function maskCpf(cpf) {
@@ -14,6 +15,18 @@ function delayDigitacao() {
 }
 
 async function abrirNovaProposta(page) {
+  // Uma aba nova dentro do contexto já logado começa em branco — precisa
+  // navegar pra área autenticada antes de procurar qualquer elemento.
+  await page.goto(PAN_BASE_URL, { waitUntil: 'domcontentloaded' });
+
+  // Se a sessão expirou, esse goto acaba redirecionando pro /login —
+  // nesse caso invalida a sessão guardada e deixa a próxima consulta
+  // forçar um novo login, em vez de insistir numa sessão morta.
+  if (/\/login/i.test(page.url())) {
+    invalidarSessao();
+    throw new Error('sessão expirada — será renovada na próxima consulta');
+  }
+
   await page.getByText('Nova proposta', { exact: true }).click();
 
   // "Financiamento" costuma já vir selecionado por padrão; clicar de novo
@@ -66,14 +79,6 @@ export async function processarConsulta(consultaId, cpf) {
 
   try {
     const resultado = await comPaginaAutenticada(async (page) => {
-      // Se a sessão expirou, o site manda de volta pro /login — nesse
-      // caso invalida a sessão guardada e deixa a próxima consulta
-      // forçar um novo login, em vez de insistir numa sessão morta.
-      if (/\/login/i.test(page.url())) {
-        invalidarSessao();
-        throw new Error('sessão expirada — será renovada na próxima consulta');
-      }
-
       await abrirNovaProposta(page);
       return preencherCpfEAguardarResultado(page, cpf);
     });
